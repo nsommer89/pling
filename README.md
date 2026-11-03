@@ -152,6 +152,10 @@ pling notifies you about private messages and messages that mention your name. W
 
 pling knows whether the window is focused only if your terminal reports focus changes. Most do. In tmux you need `set -g focus-events on`.
 
+### One person, several machines
+
+`pling init` creates a key pair per machine. To be the same name everywhere, copy `~/.config/pling/id_ed25519` and `id_ed25519.pub` to the other machine (keep the private key mode 600). Or run `pling init` there with another name, and have both names added to the server.
+
 ### Switching servers
 
 Use `--server` for a single run:
@@ -249,6 +253,8 @@ The server keeps nothing, so a restart only costs a few seconds. Clients reconne
 ---
 
 ## Contributing
+
+New here? `docs/handover.md` is a short orientation: how the pieces fit, why they look the way they do, and where to start.
 
 Ideas, fixes and new features are welcome. [ROADMAP.md](ROADMAP.md) has a list of ideas with a rough size, and where in the code each one belongs.
 
