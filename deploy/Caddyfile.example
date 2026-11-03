@@ -1,0 +1,5 @@
+# Caddy site for plingd. Caddy proxies WebSockets and keeps the Host
+# header as is, which plingd needs for the login signature.
+pling.example.com {
+	reverse_proxy plingd:8080
+}

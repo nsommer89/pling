@@ -150,8 +150,11 @@ func (c *conn) login() error {
 
 	m, err := c.readMessage(ctx)
 	if err != nil {
-		if errors.Is(err, protocol.ErrUnsupportedVersion) {
+		switch {
+		case errors.Is(err, protocol.ErrUnsupportedVersion):
 			c.fail(protocol.ErrCodeUnsupportedVersion, websocket.StatusPolicyViolation)
+		case errors.Is(err, protocol.ErrMalformed):
+			c.fail(protocol.ErrCodeBadFrame, websocket.StatusPolicyViolation)
 		}
 		c.s.log.Debug("handshake: no hello", "remote", c.remote, "err", err)
 		return err
@@ -175,6 +178,9 @@ func (c *conn) login() error {
 	defer authCancel()
 	m, err = c.readMessage(authCtx)
 	if err != nil {
+		if errors.Is(err, protocol.ErrMalformed) || errors.Is(err, protocol.ErrUnsupportedVersion) {
+			c.fail(protocol.ErrCodeBadFrame, websocket.StatusPolicyViolation)
+		}
 		return err
 	}
 	answer, ok := m.(protocol.Auth)
@@ -234,7 +240,12 @@ func (c *conn) readLoop() error {
 	for {
 		m, err := c.readMessage(context.Background())
 		if err != nil {
-			if errors.Is(err, protocol.ErrMalformed) || errors.Is(err, protocol.ErrUnsupportedVersion) {
+			switch {
+			case errors.Is(err, protocol.ErrUnsupportedVersion):
+				c.s.log.Debug("bad frame version", "name", c.name, "err", err)
+				c.sendError(protocol.ErrCodeUnsupportedVersion, "")
+				continue
+			case errors.Is(err, protocol.ErrMalformed):
 				c.s.log.Debug("bad frame", "name", c.name, "err", err)
 				c.sendError(protocol.ErrCodeBadFrame, "")
 				continue

@@ -1,0 +1,48 @@
+# GoReleaser config: `make snapshot` builds locally, a pushed tag v* runs
+# .github/workflows/release.yml which publishes a GitHub release.
+version: 2
+project_name: pling
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: pling
+    main: ./cmd/pling
+    binary: pling
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    targets: [linux_amd64, linux_arm64, darwin_arm64]
+  - id: plingd
+    main: ./cmd/plingd
+    binary: plingd
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    targets: [linux_amd64, linux_arm64, darwin_arm64]
+
+archives:
+  - id: pling
+    ids: [pling]
+    name_template: "pling_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [README.md, LICENSE]
+  - id: plingd
+    ids: [plingd]
+    name_template: "plingd_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [README.md, LICENSE, deploy/users.example.yaml]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:"]
+
+release:
+  draft: false
+  prerelease: auto

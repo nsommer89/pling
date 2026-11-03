@@ -1,0 +1,7 @@
+# pling users file: one line per user, "name: <base64 Ed25519 public key>".
+# Users get their line by running `pling pubkey`. Names are 2-16 characters
+# of a-z, 0-9, _ and -. The file is re-read on every login, so adding or
+# removing someone needs no restart.
+#
+# Example (replace with the real lines your users send you):
+# anders: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=

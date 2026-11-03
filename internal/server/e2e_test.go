@@ -326,3 +326,69 @@ func TestClientReconnectsAndEmitsEvents(t *testing.T) {
 		return ok && d.Fatal && client.IsServerCode(d.Err, protocol.ErrCodeReplaced)
 	})
 }
+
+func TestEndToEndBadFrames(t *testing.T) {
+	ts := startServer(t, Config{}, "anders")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	readErr := func(ws *websocket.Conn) protocol.Error {
+		t.Helper()
+		for {
+			_, b, err := ws.Read(ctx)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			m, err := protocol.Decode(b)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if e, ok := m.(protocol.Error); ok {
+				return e
+			}
+		}
+	}
+
+	// Garbage instead of hello: bad_frame, then the connection closes.
+	ws, _, err := websocket.Dial(ctx, ts.url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Write(ctx, websocket.MessageText, []byte("not json"))
+	if e := readErr(ws); e.Code != protocol.ErrCodeBadFrame {
+		t.Errorf("login garbage: %#v", e)
+	}
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Errorf("login garbage close: %v", err)
+	}
+	ws.CloseNow()
+
+	// A future protocol version during login.
+	ws, _, err = websocket.Dial(ctx, ts.url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Write(ctx, websocket.MessageText, []byte(`{"v":2,"kind":"hello"}`))
+	if e := readErr(ws); e.Code != protocol.ErrCodeUnsupportedVersion {
+		t.Errorf("login v2: %#v", e)
+	}
+	ws.CloseNow()
+
+	// After login, bad frames are reported but the connection stays up.
+	s := ts.dial(t, "anders")
+	for _, raw := range []string{"not json", `{"v":2,"kind":"msg","text":"x"}`, `{"v":1,"kind":"msg","text":""}`} {
+		if err := s.SendRaw(ctx, []byte(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{protocol.ErrCodeBadFrame, protocol.ErrCodeUnsupportedVersion, protocol.ErrCodeBadFrame}
+	for _, code := range want {
+		if e := next[protocol.Error](t, s); e.Code != code {
+			t.Errorf("got %q, want %q", e.Code, code)
+		}
+	}
+	send(t, s, protocol.Msg{Text: "still here"})
+	if m := next[protocol.Msg](t, s); m.Text != "still here" {
+		t.Errorf("got %#v", m)
+	}
+}

@@ -1,0 +1,6 @@
+.git
+bin
+dist
+deploy/config
+users.yaml
+*.env

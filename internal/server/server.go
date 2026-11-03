@@ -129,15 +129,18 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 
 	s.log.Info("shutting down", "online", s.hub.Count())
+	// WebSockets are hijacked, so the http.Server does not track them: our
+	// own stop signal makes each one send "shutdown" and close with 1001.
 	s.stop()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err := srv.Shutdown(shutdownCtx) // hijacked WebSockets are not tracked by Shutdown,
-	s.wg.Wait()                      // so wait for our own connection goroutines too.
+	// Plain HTTP is only /healthz and rejections, so there is nothing worth
+	// draining. Close instead of Shutdown, which can wait 5 s for idle
+	// keep-alive or half-open connections.
+	closeErr := srv.Close()
+	s.wg.Wait()
 	if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	return err
+	return closeErr
 }
 
 func (s *Server) stop() {

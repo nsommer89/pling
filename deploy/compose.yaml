@@ -1,0 +1,40 @@
+# plingd behind a reverse proxy (e.g. Caddy) on the external Docker network
+# "proxy". No host ports: the proxy reaches the container as plingd:8080.
+#
+#   mkdir -p config && cp users.example.yaml config/users.yaml
+#   docker network create proxy   # once, if your proxy has not made it
+#   PLING_HOST=pling.example.com docker compose up -d --build
+#
+# The users file is mounted as a directory, not a single file: editors
+# replace files when saving, and a single-file bind mount would keep
+# showing the old version to the container. The container runs as a
+# non-root user, so the file must be world-readable (chmod 644; public
+# keys are not secret).
+name: pling
+
+services:
+  plingd:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: plingd:local
+    restart: unless-stopped
+    environment:
+      PLING_HOST: ${PLING_HOST:?set PLING_HOST to the public host name, e.g. pling.example.com}
+      PLING_MOTD: ${PLING_MOTD:-}
+      PLING_USERS: /config/users.yaml
+      PLING_LISTEN: ":8080"
+    volumes:
+      - ./config:/config:ro
+    networks:
+      - proxy
+    mem_limit: 64m
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    external: true

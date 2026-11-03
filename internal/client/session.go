@@ -132,6 +132,12 @@ func (s *Session) Send(ctx context.Context, m protocol.Message) error {
 	return s.ws.Write(ctx, websocket.MessageText, b)
 }
 
+// SendRaw writes bytes as one text frame, bypassing encoding. It exists for
+// tests and tools that need to send malformed or future frames.
+func (s *Session) SendRaw(ctx context.Context, b []byte) error {
+	return s.ws.Write(ctx, websocket.MessageText, b)
+}
+
 // Read returns the next frame. Unknown kinds are returned as
 // protocol.Unknown and should be ignored by the caller.
 func (s *Session) Read(ctx context.Context) (protocol.Message, error) {
