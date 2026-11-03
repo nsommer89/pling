@@ -122,6 +122,15 @@ func (a *Authenticator) NewChallenge() ([]byte, error) {
 	return nonce, nil
 }
 
+// Forget drops a nonce that will not be answered (the connection went away
+// during login), so unanswered challenges never pile up. Unknown nonces
+// are ignored.
+func (a *Authenticator) Forget(nonce []byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.nonces, string(nonce))
+}
+
 // consume removes the nonce and reports whether it was issued and is still
 // valid.
 func (a *Authenticator) consume(nonce []byte) bool {

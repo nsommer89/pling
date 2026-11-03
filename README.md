@@ -99,7 +99,7 @@ That's it. If you haven't run `pling init` yet, `pling` starts it for you first.
 - **Right:** who's online. A `…` after a name means that person is typing. The list is hidden when the terminal is narrower than 80 columns.
 - **Bottom:** a status bar (server, your name, how many are online, who's typing, `↓ new messages` when you've scrolled up), and the input line with your name as the prompt.
 
-Your messages are saved locally in `~/.local/share/pling/history.jsonl`, and the last 500 are shown when you start pling.
+Your messages are saved locally in `~/.local/share/pling/history.jsonl`, and the last 500 from the same server are shown when you start pling.
 
 ### Commands
 

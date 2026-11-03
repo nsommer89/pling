@@ -15,6 +15,7 @@ const (
 	strScrolledUp      = "scrolled up · PgDn"
 	strNewMessages     = "↓ new messages"
 	strNotConnected    = "not connected, message not sent"
+	strSendFailed      = "message not sent"
 	strNobodyToReply   = "nobody to reply to yet"
 	strEmptyRoom       = "you are the only one here"
 	strServerRestart   = "the server is restarting"

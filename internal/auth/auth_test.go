@@ -153,3 +153,18 @@ func TestParseUsers(t *testing.T) {
 		t.Errorf("unexpected encoding %q", enc)
 	}
 }
+
+func TestForgetDropsUnansweredNonce(t *testing.T) {
+	f := newFixture(t)
+	nonce, _ := f.auth.NewChallenge()
+	f.auth.Forget(nonce)
+	if err := f.auth.Verify(host, "anders", f.pub, nonce, f.sign(nonce, "anders")); !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("forgotten nonce accepted: %v", err)
+	}
+	f.auth.mu.Lock()
+	n := len(f.auth.nonces)
+	f.auth.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d nonces left", n)
+	}
+}

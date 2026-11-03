@@ -156,7 +156,7 @@ func (c *conn) login() error {
 		case errors.Is(err, protocol.ErrMalformed):
 			c.fail(protocol.ErrCodeBadFrame, websocket.StatusPolicyViolation)
 		}
-		c.s.log.Debug("handshake: no hello", "remote", c.remote, "err", err)
+		c.s.log.Debug("handshake: no hello", "remote", c.remote)
 		return err
 	}
 	hello, ok := m.(protocol.Hello)
@@ -169,6 +169,7 @@ func (c *conn) login() error {
 	if err != nil {
 		return err
 	}
+	defer c.s.auth.Forget(nonce) // no-op once Verify has consumed it
 	frame, _ := protocol.Encode(protocol.Challenge{Nonce: nonce})
 	if err := c.ws.Write(ctx, websocket.MessageText, frame); err != nil {
 		return err
@@ -242,11 +243,12 @@ func (c *conn) readLoop() error {
 		if err != nil {
 			switch {
 			case errors.Is(err, protocol.ErrUnsupportedVersion):
-				c.s.log.Debug("bad frame version", "name", c.name, "err", err)
+				c.s.log.Debug("bad frame version", "name", c.name)
 				c.sendError(protocol.ErrCodeUnsupportedVersion, "")
 				continue
 			case errors.Is(err, protocol.ErrMalformed):
-				c.s.log.Debug("bad frame", "name", c.name, "err", err)
+				// No error details: JSON errors can quote bits of the text.
+				c.s.log.Debug("bad frame", "name", c.name)
 				c.sendError(protocol.ErrCodeBadFrame, "")
 				continue
 			}

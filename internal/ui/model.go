@@ -207,7 +207,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(msg.err, client.ErrNotConnected) {
 				m.system(kindError, strNotConnected)
 			} else {
-				m.system(kindError, strNotConnected+": "+msg.err.Error())
+				m.system(kindError, strSendFailed+": "+msg.err.Error())
 			}
 		}
 		return m, nil
