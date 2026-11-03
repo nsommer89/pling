@@ -31,6 +31,7 @@ type testServer struct {
 	addr   string
 	keys   map[string]ed25519.PrivateKey
 	users  string
+	srv    *Server
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -63,6 +64,7 @@ func startServer(t *testing.T, cfg Config, names ...string) *testServer {
 		cfg.Host = ts.addr
 	}
 	srv := New(cfg)
+	ts.srv = srv
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
 	go func() { ts.done <- srv.Serve(ctx, ln) }()

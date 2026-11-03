@@ -53,6 +53,8 @@ type DialOptions struct {
 	Name      string
 	Key       ed25519.PrivateKey
 	UserAgent string
+	// Header holds extra HTTP headers for the WebSocket handshake.
+	Header http.Header
 }
 
 // Dial connects and logs in. The signed host is the host[:port] part of
@@ -62,7 +64,10 @@ func Dial(ctx context.Context, o DialOptions) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	hdr := http.Header{}
+	hdr := o.Header.Clone()
+	if hdr == nil {
+		hdr = http.Header{}
+	}
 	if o.UserAgent != "" {
 		hdr.Set("User-Agent", o.UserAgent)
 	}

@@ -3,7 +3,7 @@
 //
 //	PLING_LISTEN  listen address (default ":8080")
 //	PLING_USERS   users file (default "./users.yaml"), re-read on every login
-//	PLING_HOST    public host name clients sign, e.g. "pling.example.com"
+//	PLING_HOST    public host name clients sign, e.g. "pling.example.com" (required)
 //	PLING_MOTD    message of the day ("\n" starts a new line)
 package main
 
@@ -54,12 +54,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	verbose := fs.Bool("v", false, "debug logging (frame kinds, never contents)")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	healthcheck := fs.Bool("healthcheck", false, "check /healthz of the local server and exit (for container health checks)")
+	anyHost := fs.Bool("insecure-any-host", false, "allow running without PLING_HOST, using each request's Host header (local testing only)")
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: plingd [-v] [-version] [-healthcheck]\n\n"+
+		fmt.Fprintf(stderr, "usage: plingd [-v] [-version] [-healthcheck] [-insecure-any-host]\n\n"+
 			"environment:\n"+
 			"  PLING_LISTEN  listen address (default :8080)\n"+
 			"  PLING_USERS   users file (default ./users.yaml)\n"+
-			"  PLING_HOST    public host name clients sign, e.g. pling.example.com\n"+
+			"  PLING_HOST    public host name clients sign, e.g. pling.example.com (required)\n"+
 			"  PLING_MOTD    message of the day\n\n")
 		fs.PrintDefaults()
 	}
@@ -88,12 +89,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	log := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 
+	if host == "" && !*anyHost {
+		return errors.New("PLING_HOST is not set: set it to the public host name clients connect to, " +
+			"e.g. PLING_HOST=pling.example.com (or pass -insecure-any-host for local testing)")
+	}
 	users, err := auth.LoadUsers(usersPath)
 	if err != nil {
 		return fmt.Errorf("users file: %w (see deploy/users.example.yaml)", err)
 	}
 	if host == "" {
-		log.Warn("PLING_HOST is not set; using each request's Host header as the signed host name")
+		log.Warn("running with -insecure-any-host: the signed host name is taken from each request's Host header")
 	}
 
 	ln, err := net.Listen("tcp", listen)
@@ -104,11 +109,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		"users_file", usersPath, "users", len(users), "host", host)
 
 	srv := server.New(server.Config{
-		Host:      host,
-		MOTD:      motd,
-		UsersPath: usersPath,
-		Version:   getVersion(),
-		Logger:    log,
+		Host:         host,
+		AllowAnyHost: *anyHost,
+		MOTD:         motd,
+		UsersPath:    usersPath,
+		Version:      getVersion(),
+		Logger:       log,
 	})
 	err = srv.Serve(ctx, ln)
 	log.Info("plingd stopped")

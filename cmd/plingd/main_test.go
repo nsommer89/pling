@@ -114,9 +114,41 @@ func TestRunPlingd(t *testing.T) {
 }
 
 func TestRunFailsWithoutUsersFile(t *testing.T) {
-	env := map[string]string{"PLING_USERS": filepath.Join(t.TempDir(), "missing.yaml"), "PLING_LISTEN": freePort(t)}
+	env := map[string]string{"PLING_USERS": filepath.Join(t.TempDir(), "missing.yaml"), "PLING_LISTEN": freePort(t), "PLING_HOST": "x.example"}
 	err := run(context.Background(), nil, func(k string) string { return env[k] }, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "users file") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestRunRequiresHost(t *testing.T) {
+	users := filepath.Join(t.TempDir(), "users.yaml")
+	os.WriteFile(users, []byte("# empty\n"), 0o600)
+	env := map[string]string{"PLING_USERS": users, "PLING_LISTEN": freePort(t)}
+	err := run(context.Background(), nil, func(k string) string { return env[k] }, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "PLING_HOST is not set") {
+		t.Fatalf("got %v", err)
+	}
+
+	// With -insecure-any-host it starts (and stops when the context ends).
+	ctx, cancel := context.WithCancel(context.Background())
+	var logs bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"-insecure-any-host"}, func(k string) string { return env[k] }, &bytes.Buffer{}, &logs)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for checkHealth(env["PLING_LISTEN"]) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("plingd did not start with -insecure-any-host")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "insecure-any-host") {
+		t.Errorf("no warning logged:\n%s", logs.String())
 	}
 }

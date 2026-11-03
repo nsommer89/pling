@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,9 +23,11 @@ import (
 // Defaults for Config fields left at zero.
 const (
 	DefaultMaxConns         = 100
+	DefaultMaxPending       = 16 // connections that have not finished logging in
+	DefaultMaxPendingPerIP  = 4
 	DefaultPingInterval     = 15 * time.Second
 	DefaultPongTimeout      = 30 * time.Second // ping interval + pong timeout = 45 s to detect a dead peer
-	DefaultHandshakeTimeout = 10 * time.Second
+	DefaultHandshakeTimeout = 5 * time.Second
 	writeTimeout            = 10 * time.Second
 	sendQueueSize           = 64
 )
@@ -32,14 +35,23 @@ const (
 // Config configures a Server.
 type Config struct {
 	// Host is the public host name clients sign during login, e.g.
-	// "pling.viaxyz.net". Empty means the Host header of each request.
+	// "pling.example.com". It is required unless AllowAnyHost is set.
 	Host string
+	// AllowAnyHost accepts an empty Host and uses each request's Host
+	// header instead. Then a signature made for another server that
+	// shares this users file can be relayed here, so it is for local
+	// testing only.
+	AllowAnyHost bool
 	// MOTD is shown to users after login.
 	MOTD string
 	// UsersPath is the users file; it is re-read on every login attempt.
 	UsersPath string
-	// MaxConns caps concurrent WebSocket connections.
+	// MaxConns caps logged-in connections.
 	MaxConns int
+	// MaxPending caps connections that are still logging in, in total and
+	// per client IP, so idle sockets cannot crowd out real logins.
+	MaxPending      int
+	MaxPendingPerIP int
 	// Version is reported to clients in the welcome frame.
 	Version string
 	// Logger receives one line per connect, disconnect and auth failure.
@@ -55,21 +67,30 @@ type Config struct {
 
 // Server is a pling relay.
 type Server struct {
-	cfg   Config
-	log   *slog.Logger
-	hub   *hub.Hub
-	auth  *auth.Authenticator
-	conns atomic.Int64
+	cfg     Config
+	log     *slog.Logger
+	hub     *hub.Hub
+	auth    *auth.Authenticator
+	authed  atomic.Int64 // logged-in connections
+	pending *pendingLimiter
+	warns   *logLimiter
 
-	stopOnce sync.Once
-	stopCh   chan struct{} // closed when the server shuts down
-	wg       sync.WaitGroup
+	mu      sync.Mutex
+	stopped bool
+	stopCh  chan struct{} // closed when the server shuts down
+	wg      sync.WaitGroup
 }
 
 // New returns a server for cfg.
 func New(cfg Config) *Server {
 	if cfg.MaxConns <= 0 {
 		cfg.MaxConns = DefaultMaxConns
+	}
+	if cfg.MaxPending <= 0 {
+		cfg.MaxPending = DefaultMaxPending
+	}
+	if cfg.MaxPendingPerIP <= 0 {
+		cfg.MaxPendingPerIP = DefaultMaxPendingPerIP
 	}
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = DefaultPingInterval
@@ -89,11 +110,13 @@ func New(cfg Config) *Server {
 	}
 	usersPath := cfg.UsersPath
 	return &Server{
-		cfg:    cfg,
-		log:    cfg.Logger,
-		hub:    h,
-		auth:   &auth.Authenticator{LoadUsers: func() (auth.Users, error) { return auth.LoadUsers(usersPath) }},
-		stopCh: make(chan struct{}),
+		cfg:     cfg,
+		log:     cfg.Logger,
+		hub:     h,
+		auth:    &auth.Authenticator{LoadUsers: func() (auth.Users, error) { return auth.LoadUsers(usersPath) }},
+		pending: newPendingLimiter(cfg.MaxPending, cfg.MaxPendingPerIP),
+		warns:   newLogLimiter(time.Second),
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -112,6 +135,9 @@ func (s *Server) Handler() http.Handler {
 // every WebSocket with status 1001 (going away), waits for the connection
 // goroutines to finish and returns.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	if s.cfg.Host == "" && !s.cfg.AllowAnyHost {
+		return ErrNoHost
+	}
 	srv := &http.Server{
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -143,51 +169,103 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	return closeErr
 }
 
+// ErrNoHost is returned by Serve when Config.Host is empty and
+// AllowAnyHost is not set.
+var ErrNoHost = errors.New("server: no public host name configured")
+
 func (s *Server) stop() {
-	s.stopOnce.Do(func() { close(s.stopCh) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.stopped {
+		s.stopped = true
+		close(s.stopCh)
+	}
 }
 
-// remoteAddr returns the client address for logs, preferring the address a
-// reverse proxy put in X-Forwarded-For.
-func remoteAddr(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		return strings.TrimSpace(first)
+// track registers a connection handler with the wait group, unless the
+// server is stopping. The mutex orders every Add before stop's Wait.
+func (s *Server) track() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return false
 	}
-	return r.RemoteAddr
+	s.wg.Add(1)
+	return true
+}
+
+// warn logs a warning at most once per second per key, with the number of
+// lines suppressed since the last one, so floods cannot fill the disk.
+func (s *Server) warn(key, msg string, args ...any) {
+	ok, suppressed := s.warns.allow(key)
+	if !ok {
+		return
+	}
+	if suppressed > 0 {
+		args = append(args, "suppressed", suppressed)
+	}
+	s.log.Warn(msg, args...)
+}
+
+// clientIP returns the client's IP address. X-Forwarded-For is trusted only
+// when the TCP peer is a loopback or private address (a reverse proxy on
+// the same host or Docker network); then the last entry, the one our proxy
+// added, is used. Anyone else could put anything in that header.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil || !(peer.IsLoopback() || peer.IsPrivate()) {
+		return host
+	}
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	if xff == "" {
+		return host
+	}
+	parts := strings.Split(xff, ",")
+	if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil {
+		return ip.Unmap().String()
+	}
+	return host
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		s.log.Warn("rejected non-websocket request", "remote", remoteAddr(r), "method", r.Method)
+		s.log.Debug("rejected non-websocket request", "remote", ip, "method", r.Method)
 		w.Header().Set("Upgrade", "websocket")
 		http.Error(w, "this endpoint only speaks WebSocket", http.StatusUpgradeRequired)
 		return
 	}
-	select {
-	case <-s.stopCh:
+	if !s.track() {
 		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 		return
-	default:
 	}
-	if n := s.conns.Add(1); n > int64(s.cfg.MaxConns) {
-		s.conns.Add(-1)
-		s.log.Warn("rejected connection: server full", "remote", remoteAddr(r), "max", s.cfg.MaxConns)
+	defer s.wg.Done()
+	if s.authed.Load() >= int64(s.cfg.MaxConns) {
+		s.warn("full", "rejected connection: server full", "remote", ip, "max", s.cfg.MaxConns)
 		http.Error(w, "server full", http.StatusServiceUnavailable)
 		return
 	}
-	defer s.conns.Add(-1)
-	s.wg.Add(1)
-	defer s.wg.Done()
+	release, ok := s.pending.acquire(ip)
+	if !ok {
+		s.warn("pending", "rejected connection: too many logins in progress", "remote", ip)
+		http.Error(w, "too many logins in progress, try again", http.StatusServiceUnavailable)
+		return
+	}
+	defer release()
 
 	host := s.cfg.Host
 	if host == "" {
 		host = r.Host
 	}
-	c, err := accept(w, r, s, host)
+	c, err := accept(w, r, s, host, ip)
 	if err != nil {
-		s.log.Debug("websocket accept failed", "remote", remoteAddr(r), "err", err)
+		s.log.Debug("websocket accept failed", "remote", ip, "err", err)
 		return
 	}
+	c.loginDone = release
 	c.run()
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 
@@ -26,6 +27,9 @@ type conn struct {
 	name   string
 	since  time.Time
 
+	// loginDone frees the pending-login slot; called when login ends.
+	loginDone func()
+
 	out chan []byte
 
 	stopOnce sync.Once
@@ -34,7 +38,7 @@ type conn struct {
 	reason   string // error code sent to the client before closing, if any
 }
 
-func accept(w http.ResponseWriter, r *http.Request, s *Server, host string) (*conn, error) {
+func accept(w http.ResponseWriter, r *http.Request, s *Server, host, ip string) (*conn, error) {
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// No browsers are involved, and the origin check would only get in
 		// the way of non-browser clients that send an Origin header.
@@ -48,7 +52,7 @@ func accept(w http.ResponseWriter, r *http.Request, s *Server, host string) (*co
 		s:       s,
 		ws:      ws,
 		host:    host,
-		remote:  remoteAddr(r),
+		remote:  ip,
 		since:   time.Now(),
 		out:     make(chan []byte, sendQueueSize),
 		stopped: make(chan struct{}),
@@ -104,10 +108,22 @@ func (c *conn) run() {
 		}
 	}()
 
-	if err := c.login(); err != nil {
+	err := c.login()
+	if c.loginDone != nil {
+		c.loginDone()
+	}
+	if err != nil {
 		c.stop("")
 		return
 	}
+	if c.s.authed.Add(1) > int64(c.s.cfg.MaxConns) {
+		c.s.authed.Add(-1)
+		c.s.warn("full", "rejected login: server full", "name", c.name, "remote", c.remote, "max", c.s.cfg.MaxConns)
+		c.fail(protocol.ErrCodeServerFull, websocket.StatusTryAgainLater)
+		c.stop("")
+		return
+	}
+	defer c.s.authed.Add(-1)
 
 	users := c.s.hub.Join(c)
 	c.s.log.Info("connect", "name", c.name, "remote", c.remote, "online", len(users))
@@ -123,7 +139,7 @@ func (c *conn) run() {
 	go func() { defer wg.Done(); c.writeLoop() }()
 	go func() { defer wg.Done(); c.pingLoop() }()
 
-	err := c.readLoop()
+	err = c.readLoop()
 	c.stop("")
 	c.s.hub.Leave(c)
 	wg.Wait()
@@ -190,7 +206,7 @@ func (c *conn) login() error {
 		return fmt.Errorf("expected auth, got %s", m.Kind())
 	}
 	if err := c.s.auth.Verify(c.host, hello.Name, hello.PubKey, nonce, answer.Sig); err != nil {
-		c.s.log.Warn("auth failed", "name", logName(hello.Name), "remote", c.remote, "err", err)
+		c.s.warn("auth", "auth failed", "name", logName(hello.Name), "remote", c.remote, "err", err)
 		c.fail(protocol.ErrCodeAuthFailed, websocket.StatusPolicyViolation)
 		return err
 	}
@@ -213,6 +229,10 @@ func (c *conn) readMessage(ctx context.Context) (protocol.Message, error) {
 	}
 	if typ != websocket.MessageText {
 		return nil, fmt.Errorf("%w: binary frame", protocol.ErrMalformed)
+	}
+	// encoding/json would quietly turn invalid UTF-8 into U+FFFD.
+	if !utf8.Valid(b) {
+		return nil, fmt.Errorf("%w: invalid UTF-8", protocol.ErrMalformed)
 	}
 	return protocol.Decode(b)
 }
