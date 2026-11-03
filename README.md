@@ -61,10 +61,10 @@ pling asks two questions:
 1. **Your name.** Use 2–16 characters: `a-z`, `0-9`, `_` or `-`. This is the name others see.
 2. **The server.** Press Enter to accept `wss://pling.viaxyz.net/ws`, or type the address you were given.
 
-pling then creates your key pair in `~/.config/pling/` (the private key `id_ed25519` is readable only by you) and prints a line like this:
+pling then creates your key pair in `~/.config/pling/` (the private key `id_ed25519` is readable only by you) and prints a line like this. Yours has your name and 44 characters of random-looking key; the `A`s here are just a placeholder:
 
 ```
-anders: jhpSNqjR4mt2LFL6LLnhJMgbjTbDiq6p9W4lEpCmRLY=
+anders: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 ```
 
 ### 3. Send your public key line to the admin
@@ -162,6 +162,8 @@ pling --server wss://chat.example.com/ws
 
 To switch for good, change `server` in the config file, or run `pling init` again (it keeps your key). Your key works on every server, but each server's admin has to add your line to their own users file.
 
+Addresses start with `wss://` (encrypted). pling refuses unencrypted `ws://` except to `localhost`, because anyone on the way could read along. For a test server without TLS on your own network, add `--insecure` (to `pling` and to `pling init`).
+
 ### Troubleshooting
 
 | You see | What to do |
@@ -173,6 +175,8 @@ To switch for good, change `server` in the config file, or run `pling init` agai
 | `slow down: too many messages` | The server allows 20 messages per 10 seconds. Wait a moment. |
 | `… is readable by other users; fix it with: chmod 600 …` | Your private key file has the wrong permissions. Run the `chmod` command shown. |
 | `config has no valid name` / `no key found` | Run `pling init`. |
+| `unencrypted ws:// is only allowed to localhost` | Use the `wss://` address. Only for a test server without TLS: add `--insecure`. |
+| `server answered HTTP 503` | The server is full, or too many logins are in progress at once. pling retries on its own. |
 | Garbled lines or boxes instead of `┌─┐` | Your terminal isn't using UTF-8. Set a UTF-8 locale, e.g. `export LANG=en_US.UTF-8`. |
 
 ---
@@ -187,18 +191,20 @@ You need a machine that can be reached from the internet and a reverse proxy tha
 |---|---|---|
 | `PLING_LISTEN` | `:8080` | Address to listen on |
 | `PLING_USERS` | `./users.yaml` | The users file, re-read on every login |
-| `PLING_HOST` | (the request's Host header) | The public host name, e.g. `pling.example.com`. Clients sign it when they log in, so it must match the host in the address they use (including `:port` if that address has one). |
+| `PLING_HOST` | (required) | The public host name, e.g. `pling.example.com`. Clients sign it when they log in, so it must match the host in the address they use (including `:port` if that address has one). A login signature made for another server is then useless here. plingd refuses to start without it, unless you pass `-insecure-any-host` (local testing only: it trusts each request's Host header instead). |
 | `PLING_MOTD` | (empty) | Message of the day, shown after login. `\n` starts a new line. |
 
-Flags: `-v` logs more detail (frame types, never message text), `-version`, and `-healthcheck` (checks the local server, for container health checks).
+Flags: `-v` logs more detail (frame types, never message text), `-version`, `-healthcheck` (checks the local server, for container health checks) and `-insecure-any-host` (see `PLING_HOST`).
+
+Built-in limits: 100 logged-in users; at most 16 connections that are still logging in (4 per client address), each with 5 seconds to finish. Behind a reverse proxy on the same machine or Docker network, plingd takes the client address from `X-Forwarded-For`. Repeated warnings (failed logins, server full) are logged at most once per second, with a count of the ones skipped.
 
 ### The users file
 
-One line per user, exactly as people send them to you:
+One line per user, exactly as people send them to you (the keys below are placeholders):
 
 ```yaml
-anders: jhpSNqjR4mt2LFL6LLnhJMgbjTbDiq6p9W4lEpCmRLY=
-nikolaj: ZpHYZmFuf0YQFLDxHV+LqUZd0bzV+J//a2Xd3iuOnsU=
+anders: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+nikolaj: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=
 ```
 
 To add someone, paste their line into the file. To remove them, delete it. Changes apply on the next login, with no restart. If a line is broken, every login fails and the log says why, so check the log after editing. See [deploy/users.example.yaml](deploy/users.example.yaml).
@@ -229,9 +235,12 @@ git clone https://github.com/nsommer89/pling.git && cd pling/deploy
 mkdir -p config && cp users.example.yaml config/users.yaml && chmod 644 config/users.yaml
 # edit config/users.yaml and add your users
 docker network create proxy        # only if your proxy hasn't created it already
-PLING_HOST=pling.example.com docker compose up -d --build
+printf 'PLING_HOST=pling.example.com\nPLING_VERSION=%s\n' "$(git describe --tags --always)" > .env
+docker compose up -d --build
 docker compose logs -f             # one line per login/logout, never message text
 ```
+
+Compose reads `.env` for every command, so `logs` and `down` work without repeating the settings. `PLING_VERSION` is the version clients see after login. Docker keeps at most 3 × 10 MB of logs.
 
 Caddy, if it runs on the same `proxy` network: see [deploy/Caddyfile.example](deploy/Caddyfile.example).
 
@@ -252,7 +261,7 @@ Ideas, fixes and new features are welcome. [ROADMAP.md](ROADMAP.md) has a list o
    ```sh
    make check        # gofmt, go vet and all tests; this is what CI runs
    make build        # bin/pling and bin/plingd
-   make run-server   # local server on :8080 with ./users.yaml
+   make run-server   # local server on :8080 with ./users.yaml (signed host localhost:8080)
    make run-client   # client against the local server
    ```
    For a local test, put your own line from `pling pubkey` in `./users.yaml` (git ignores it).

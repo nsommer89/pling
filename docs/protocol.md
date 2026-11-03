@@ -42,7 +42,8 @@ Each WebSocket **text** message holds exactly one JSON object:
 |---|---|---|
 | `auth_failed` | Unknown name, wrong key, bad signature, or an expired/reused nonce. All of these look the same, so nobody can probe which names exist. | closed (1008) |
 | `unsupported_version` | Wrong `v` (during login, a wrong `v` in `auth` is reported as `bad_frame`) | closed during login, open afterwards |
-| `bad_frame` | Not JSON, missing `kind`, wrong type, wrong frame during login, empty or invalid UTF-8 text | closed during login, open afterwards |
+| `bad_frame` | Not JSON, invalid UTF-8 anywhere in the frame, missing `kind`, wrong type, wrong frame during login, empty text | closed during login, open afterwards |
+| `server_full` | The login succeeded, but the server reached its user cap in the meantime (normally a full server answers HTTP 503 before the upgrade) | closed (1013) |
 | `too_large` | `text` over 4096 bytes | open |
 | `rate_limited` | More than 20 `msg` frames in 10 s; the frame is dropped | open |
 | `not_online` | DM to someone who isn't online; `detail` is the name | open |
@@ -62,11 +63,11 @@ client                                      server
   | <-------------- welcome{...} or error{...} |
 ```
 
-- `host` is the `host[:port]` part of the URL the client connected to, e.g. `pling.viaxyz.net`. The server compares it against `PLING_HOST`, or the request's `Host` header if that isn't set. A signature made for one server is therefore useless on another.
+- `host` is the `host[:port]` part of the URL the client connected to, e.g. `pling.viaxyz.net`. The server compares it against its configured `PLING_HOST`, so a signature made for one server is useless on another. plingd refuses to start without `PLING_HOST`. The only exception is `-insecure-any-host`, for local testing: then the server uses each request's `Host` header, and that promise no longer holds, because a server that shares your key could relay your login.
 - `||` is plain byte concatenation, with no separators. The nonce has a fixed size and the host is fixed per server, so the result is unambiguous.
 - The server re-reads `users.yaml` on **every** login attempt. It checks that `name` exists, that `pubkey` is the key on file for that name, and that `sig` verifies. Any failure gives the same `auth_failed`.
 - The nonce is used up by the first `auth` attempt, whether it succeeds or not.
-- The whole login must finish within 10 s of connecting (the server's handshake timeout).
+- The whole login must finish within 5 s of connecting (the server's handshake timeout). Otherwise the connection is closed.
 
 Names are 2–16 characters of `a-z`, `0-9`, `_` and `-`.
 
@@ -77,7 +78,8 @@ Names are 2–16 characters of `a-z`, `0-9`, `_` and `-`.
 | Message text | 4096 bytes (UTF-8) |
 | WebSocket frame | 32 KiB (bigger frames close the connection with 1009) |
 | Messages | 20 per 10 s per user (sliding window) |
-| Connections | 100 per server; more get HTTP 503 before the WebSocket upgrade |
+| Logged-in users | 100 per server; more get HTTP 503 before the WebSocket upgrade |
+| Logins in progress | 16 per server and 4 per client address; more get HTTP 503. The client address is the TCP peer, or the last `X-Forwarded-For` entry when the peer is a loopback or private address (a local reverse proxy) |
 | Logins per name | 1; a new login kicks the old one with `replaced` |
 | Liveness | The server pings every 15 s and drops a connection without a pong within 30 s, so a dead peer is noticed within 45 s |
 
@@ -88,7 +90,7 @@ Names are 2–16 characters of `a-z`, `0-9`, `_` and `-`.
 `>` is client to server, `<` is server to client. Keys are shortened.
 
 ```
-> {"v":1,"kind":"hello","name":"anders","pubkey":"sAkHtnos…tI4="}
+> {"v":1,"kind":"hello","name":"anders","pubkey":"AAAA…AAA="}
 < {"v":1,"kind":"challenge","nonce":"q8e1…Zg=="}
 > {"v":1,"kind":"auth","sig":"3n0V…AQ=="}
 < {"v":1,"kind":"welcome","name":"anders","motd":"Welcome!","users":["anders","nikolaj"],"server":"v0.1.0"}

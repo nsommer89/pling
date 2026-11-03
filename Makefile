@@ -25,7 +25,7 @@ test: ## run the tests
 race: ## run the tests with the race detector (needs cgo)
 	$(GO) test -race ./...
 
-run-server: build ## run plingd on :8080 with ./users.yaml (signed host localhost:8080)
+run-server: build ## run plingd on :8080 with ./users.yaml (PLING_HOST defaults to localhost:8080)
 	PLING_HOST=$${PLING_HOST:-localhost:8080} PLING_USERS=$${PLING_USERS:-./users.yaml} bin/plingd -v
 
 run-client: build ## run the client against the local server
