@@ -23,7 +23,7 @@ func idleSocket(ctx context.Context, url, ip string) (*websocket.Conn, *http.Res
 }
 
 func TestIdleSocketsDoNotBlockOtherLogins(t *testing.T) {
-	ts := startServer(t, Config{MaxPending: 16, MaxPendingPerIP: 4, HandshakeTimeout: 3 * time.Second}, "anders")
+	ts := startServer(t, Config{HandshakeTimeout: 3 * time.Second}, "anders") // defaults: 64 total, 2 per address
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -40,8 +40,9 @@ func TestIdleSocketsDoNotBlockOtherLogins(t *testing.T) {
 		accepted++
 		defer ws.CloseNow()
 	}
-	if accepted != 4 || rejected != 6 {
-		t.Errorf("per-IP cap: %d accepted, %d rejected; want 4 and 6", accepted, rejected)
+	if accepted != DefaultMaxPendingPerIP || rejected != 10-DefaultMaxPendingPerIP {
+		t.Errorf("per-address cap: %d accepted, %d rejected; want %d and %d",
+			accepted, rejected, DefaultMaxPendingPerIP, 10-DefaultMaxPendingPerIP)
 	}
 
 	// A real login from another address still gets in.
@@ -278,5 +279,55 @@ func TestNotOnline(t *testing.T) {
 	send(t, a, protocol.Msg{To: "Not A Name", Text: "x"})
 	if e := next[protocol.Error](t, a); e.Code != protocol.ErrCodeNotOnline {
 		t.Errorf("invalid name: %#v", e)
+	}
+}
+
+func TestAddressKey(t *testing.T) {
+	cases := map[string]string{
+		"203.0.113.5":          "203.0.113.5",
+		"::ffff:203.0.113.5":   "203.0.113.5",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
+		"2001:db8:1:2::ffff":   "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":      "2001:db8:1:3::/64",
+		"fe80::1%eth0":         "fe80::/64",
+		"not-an-ip":            "not-an-ip",
+	}
+	for in, want := range cases {
+		if got := addressKey(in); got != want {
+			t.Errorf("addressKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPendingLimiterGroupsIPv6By64(t *testing.T) {
+	p := newPendingLimiter(64, 2)
+	r1, ok1 := p.acquire("2001:db8:1:2::1")
+	_, ok2 := p.acquire("2001:db8:1:2::2")
+	_, ok3 := p.acquire("2001:db8:1:2:ffff:ffff:ffff:ffff") // same /64: third one
+	_, ok4 := p.acquire("2001:db8:1:3::1")                  // another /64
+	if !ok1 || !ok2 || ok3 || !ok4 {
+		t.Fatalf("got %v %v %v %v, want true true false true", ok1, ok2, ok3, ok4)
+	}
+	r1()
+	r1() // releasing twice frees one slot only
+	if _, ok := p.acquire("2001:db8:1:2::3"); !ok {
+		t.Error("slot in the /64 not freed")
+	}
+	if _, ok := p.acquire("2001:db8:1:2::4"); ok {
+		t.Error("double release freed two slots")
+	}
+	if p.count() != 3 { // ::2, ::3 and the other /64
+		t.Errorf("count %d, want 3", p.count())
+	}
+
+	// The total cap still applies across addresses.
+	q := newPendingLimiter(3, 2)
+	for i, ip := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
+		if _, ok := q.acquire(ip); !ok {
+			t.Fatalf("acquire %d refused", i)
+		}
+	}
+	if _, ok := q.acquire("198.51.100.4"); ok {
+		t.Error("total cap ignored")
 	}
 }

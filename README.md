@@ -196,7 +196,7 @@ You need a machine that can be reached from the internet and a reverse proxy tha
 
 Flags: `-v` logs more detail (frame types, never message text), `-version`, `-healthcheck` (checks the local server, for container health checks) and `-insecure-any-host` (see `PLING_HOST`).
 
-Built-in limits: 100 logged-in users; at most 16 connections that are still logging in (4 per client address), each with 5 seconds to finish. Behind a reverse proxy on the same machine or Docker network, plingd takes the client address from `X-Forwarded-For`. Repeated warnings (failed logins, server full) are logged at most once per second, with a count of the ones skipped.
+Built-in limits: 100 logged-in users; at most 64 connections that are still logging in (2 per client address, where all IPv6 addresses in one /64 count as one address), each with 5 seconds to finish. Behind a reverse proxy on the same machine or Docker network, plingd takes the client address from `X-Forwarded-For`. Repeated warnings (failed logins, server full) are logged at most once per second, with a count of the ones skipped.
 
 ### The users file
 

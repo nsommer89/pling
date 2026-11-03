@@ -23,8 +23,8 @@ import (
 // Defaults for Config fields left at zero.
 const (
 	DefaultMaxConns         = 100
-	DefaultMaxPending       = 16 // connections that have not finished logging in
-	DefaultMaxPendingPerIP  = 4
+	DefaultMaxPending       = 64 // connections that have not finished logging in
+	DefaultMaxPendingPerIP  = 2  // per IPv4 address or IPv6 /64
 	DefaultPingInterval     = 15 * time.Second
 	DefaultPongTimeout      = 30 * time.Second // ping interval + pong timeout = 45 s to detect a dead peer
 	DefaultHandshakeTimeout = 5 * time.Second

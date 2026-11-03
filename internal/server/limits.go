@@ -1,12 +1,29 @@
 package server
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 )
 
+// addressKey groups client addresses for the per-address limit: an IPv4
+// address counts on its own, an IPv6 address by its /64 prefix, because
+// one home or server usually gets a whole /64 and can pick any address in
+// it. Unparsable input is used as is.
+func addressKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	return netip.PrefixFrom(addr.WithZone(""), 64).Masked().String()
+}
+
 // pendingLimiter caps connections that have not finished logging in, in
-// total and per client IP.
+// total and per client address (see addressKey).
 type pendingLimiter struct {
 	max, perIP int
 
@@ -22,6 +39,7 @@ func newPendingLimiter(max, perIP int) *pendingLimiter {
 // acquire takes a slot for ip. The returned release may be called more
 // than once; only the first call frees the slot.
 func (p *pendingLimiter) acquire(ip string) (release func(), ok bool) {
+	ip = addressKey(ip)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.total >= p.max || p.byIP[ip] >= p.perIP {

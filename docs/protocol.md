@@ -79,7 +79,7 @@ Names are 2–16 characters of `a-z`, `0-9`, `_` and `-`.
 | WebSocket frame | 32 KiB (bigger frames close the connection with 1009) |
 | Messages | 20 per 10 s per user (sliding window) |
 | Logged-in users | 100 per server; more get HTTP 503 before the WebSocket upgrade |
-| Logins in progress | 16 per server and 4 per client address; more get HTTP 503. The client address is the TCP peer, or the last `X-Forwarded-For` entry when the peer is a loopback or private address (a local reverse proxy) |
+| Logins in progress | 64 per server and 2 per client address (an IPv4 address, or an IPv6 /64 prefix); more get HTTP 503. The client address is the TCP peer, or the last `X-Forwarded-For` entry when the peer is a loopback or private address (a local reverse proxy) |
 | Logins per name | 1; a new login kicks the old one with `replaced` |
 | Liveness | The server pings every 15 s and drops a connection without a pong within 30 s, so a dead peer is noticed within 45 s |
 
