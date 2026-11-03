@@ -3,10 +3,6 @@
 version: 2
 project_name: pling
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: pling
     main: ./cmd/pling

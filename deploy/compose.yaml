@@ -3,7 +3,10 @@
 #
 #   mkdir -p config && cp users.example.yaml config/users.yaml
 #   docker network create proxy   # once, if your proxy has not made it
-#   PLING_HOST=pling.example.com docker compose up -d --build
+#   printf 'PLING_HOST=pling.example.com\nPLING_VERSION=%s\n' "$(git describe --tags --always)" > .env
+#   docker compose up -d --build
+#
+# Compose reads .env in this directory for every command (up, logs, down).
 #
 # The users file is mounted as a directory, not a single file: editors
 # replace files when saving, and a single-file bind mount would keep
@@ -17,6 +20,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        VERSION: ${PLING_VERSION:-unknown} # shown to clients after login
     image: plingd:local
     restart: unless-stopped
     environment:
@@ -29,6 +34,12 @@ services:
     networks:
       - proxy
     mem_limit: 64m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     read_only: true
     cap_drop:
       - ALL
