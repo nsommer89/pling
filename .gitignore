@@ -1,0 +1,20 @@
+# Build output
+/pling
+/plingd
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Real users files and environment files never go into git
+users.yaml
+!deploy/users.example.yaml
+deploy/config/
+*.env
+.env
+
+# Editors
+.idea/
+.vscode/
+*.swp
