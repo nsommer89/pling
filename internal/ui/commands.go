@@ -48,22 +48,22 @@ func parseDice(spec string) (n, sides int, err error) {
 	}
 	left, right, ok := strings.Cut(spec, "d")
 	if !ok {
-		return 0, 0, errors.New("expected NdM")
+		return 0, 0, errors.New(strDiceFormat)
 	}
 	n = 1
 	if left != "" {
 		if n, err = strconv.Atoi(left); err != nil {
-			return 0, 0, errors.New("N is not a number")
+			return 0, 0, errors.New(strDiceCount)
 		}
 	}
 	if sides, err = strconv.Atoi(right); err != nil {
-		return 0, 0, errors.New("M is not a number")
+		return 0, 0, errors.New(strDiceSides)
 	}
 	if n < 1 || n > maxDice {
-		return 0, 0, errors.New("1 to 20 dice")
+		return 0, 0, errors.New(strDiceCountRange)
 	}
 	if sides < minSides || sides > maxSides {
-		return 0, 0, errors.New("2 to 1000 sides")
+		return 0, 0, errors.New(strDiceSidesRange)
 	}
 	return n, sides, nil
 }

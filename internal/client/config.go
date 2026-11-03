@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -119,6 +121,27 @@ func SaveConfig(path string, cfg Config) error {
 		"# notify: \"bell\", \"desktop\" (notify-send), \"both\" or \"off\"\n" +
 		"# fun:    confetti when someone joins (true/false)\n\n" + body.String()
 	return writeFileAtomic(path, []byte(content), 0o600)
+}
+
+// ErrInsecure is returned for a ws:// URL to a host that is not the local
+// machine, unless insecure use was asked for.
+var ErrInsecure = errors.New("unencrypted ws:// is only allowed to localhost; use wss:// or pass --insecure")
+
+// CheckTransport refuses plain ws:// to anything but a loopback host
+// unless insecure is set: without TLS anyone on the way could read the
+// chat and relay your login.
+func CheckTransport(u *url.URL, insecure bool) error {
+	if u.Scheme != "ws" || insecure {
+		return nil
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", u.Host, ErrInsecure)
 }
 
 // ParseServerURL checks that s is a ws:// or wss:// URL with a host.

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -29,8 +30,20 @@ type (
 // ErrNotConnected is returned by Send while there is no connection.
 var ErrNotConnected = errors.New("not connected")
 
-// backoff is the wait before reconnect attempt n (1-based).
+// backoff is the base wait before reconnect attempt n (1-based).
 var backoff = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+
+// stableAfter is how long a connection must last before the backoff starts
+// over; a server that accepts and drops at once keeps backing off.
+const stableAfter = 30 * time.Second
+
+// retryDelay returns the wait after the given number of consecutive
+// failures (1-based), with ±20 % jitter so clients do not all reconnect in
+// the same instant after a server restart. r is a random value in [0, 1).
+func retryDelay(failures int, r float64) time.Duration {
+	base := backoff[min(max(failures, 1)-1, len(backoff)-1)]
+	return time.Duration(float64(base) * (0.8 + 0.4*r))
+}
 
 // Client keeps a session alive, reconnecting with backoff, and turns
 // everything into events for the UI.
@@ -54,7 +67,8 @@ func (c *Client) Events() <-chan any { return c.events }
 // another login replaced this one, or the protocol versions differ.
 func IsFatal(err error) bool {
 	var he *HTTPError
-	return IsServerCode(err, protocol.ErrCodeAuthFailed) ||
+	return errors.Is(err, ErrInsecure) ||
+		IsServerCode(err, protocol.ErrCodeAuthFailed) ||
 		IsServerCode(err, protocol.ErrCodeReplaced) ||
 		IsServerCode(err, protocol.ErrCodeUnsupportedVersion) ||
 		(errors.As(err, &he) && he.Status == 404)
@@ -70,8 +84,11 @@ func (c *Client) Run(ctx context.Context) {
 		}
 		sess, err := Dial(ctx, c.opts)
 		if err == nil {
-			failures = 0
+			since := time.Now()
 			err = c.serve(ctx, sess)
+			if time.Since(since) >= stableAfter {
+				failures = 0
+			}
 		}
 		failures++
 		if ctx.Err() != nil {
@@ -81,7 +98,7 @@ func (c *Client) Run(ctx context.Context) {
 			c.emit(ctx, Disconnected{Err: err, Fatal: true})
 			return
 		}
-		wait := backoff[min(failures-1, len(backoff)-1)]
+		wait := retryDelay(failures, rand.Float64())
 		if !c.emit(ctx, Disconnected{Err: err, RetryIn: wait}) {
 			return
 		}

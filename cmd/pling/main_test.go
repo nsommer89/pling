@@ -77,3 +77,21 @@ func TestPubkeyWithoutKey(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestInitRefusesPlainWSToRemoteHost(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	var out bytes.Buffer
+	in := strings.NewReader("anders\nws://chat.example.com/ws\nwss://chat.example.com/ws\n")
+	if err := run([]string{"init"}, in, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "only works for localhost") {
+		t.Errorf("ws:// to a remote host accepted:\n%s", out.String())
+	}
+	var ok bytes.Buffer
+	in = strings.NewReader("anders\nws://chat.example.com/ws\n")
+	if err := run([]string{"--insecure", "init"}, in, &ok, &ok); err != nil {
+		t.Fatalf("--insecure init: %v\n%s", err, ok.String())
+	}
+}

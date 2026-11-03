@@ -365,8 +365,15 @@ func (m *Model) handleEvent(ev any) tea.Cmd {
 		w := ev.Welcome
 		m.state = stateConnected
 		m.lastDrop = ""
-		m.self = w.Name
-		m.users = slices.Clone(w.Users)
+		if name := sanitize(w.Name); protocol.ValidName(name) {
+			m.self = name
+		}
+		m.users = m.users[:0]
+		for _, u := range w.Users {
+			if u = sanitize(u); protocol.ValidName(u) && !slices.Contains(m.users, u) {
+				m.users = append(m.users, u)
+			}
+		}
 		slices.Sort(m.users)
 		m.applyInputStyle()
 		m.system(kindSystem, strWelcome(m.o.Host, w.Name))
@@ -403,9 +410,9 @@ func (m *Model) reportDisconnect(ev client.Disconnected) {
 	case errors.As(ev.Err, &he) && he.Status == 404:
 		lines = []string{strNotFound, strQuitHint}
 	case client.IsServerCode(ev.Err, protocol.ErrCodeShutdown):
-		lines = []string{strDisconnectedRetry(strServerRestart, int(ev.RetryIn.Seconds()))}
+		lines = []string{strDisconnectedRetry(strServerRestart, seconds(ev.RetryIn))}
 	default:
-		lines = []string{strDisconnectedRetry(describeErr(ev.Err), int(ev.RetryIn.Seconds()))}
+		lines = []string{strDisconnectedRetry(describeErr(ev.Err), seconds(ev.RetryIn))}
 	}
 	text := strings.Join(lines, "\n")
 	if text == m.lastDrop {
@@ -415,6 +422,29 @@ func (m *Model) reportDisconnect(ev client.Disconnected) {
 	for _, l := range lines {
 		m.system(kindError, l)
 	}
+}
+
+// seconds rounds a (jittered) retry delay to whole seconds, at least 1.
+func seconds(d time.Duration) int {
+	return max(1, int(d.Round(time.Second)/time.Second))
+}
+
+// mentions reports whether text contains name as a whole word. Words are
+// runs of the characters allowed in names, so "nikolaj:" and "@nikolaj"
+// match but "nikolajsen" does not.
+func mentions(text, name string) bool {
+	if name == "" {
+		return false
+	}
+	isNameRune := func(r rune) bool {
+		return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+	}
+	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !isNameRune(r) }) {
+		if word == name {
+			return true
+		}
+	}
+	return false
 }
 
 // describeErr shortens network errors for the log line.
@@ -513,7 +543,7 @@ func (m *Model) handleMsg(f protocol.Msg) tea.Cmd {
 		return nil
 	}
 	private := e.to != ""
-	mention := m.self != "" && strings.Contains(strings.ToLower(e.text), m.self)
+	mention := mentions(e.text, m.self)
 	if private || mention || !m.focused {
 		return m.notifier.notify(strNotifyTitle(e.from, private), e.text)
 	}

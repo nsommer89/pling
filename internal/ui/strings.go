@@ -36,6 +36,11 @@ const (
 	strSelectHint      = "tip: hold Shift to select text with the mouse"
 	strHistoryLoadFail = "could not read local history"
 	strHistorySaveFail = "could not save to local history"
+	strDiceFormat      = "expected NdM"
+	strDiceCount       = "N is not a number"
+	strDiceSides       = "M is not a number"
+	strDiceCountRange  = "1 to 20 dice"
+	strDiceSidesRange  = "2 to 1000 sides"
 )
 
 func strWelcome(host, name string) string {

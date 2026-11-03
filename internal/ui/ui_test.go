@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -426,5 +427,41 @@ func TestModelStoresHistory(t *testing.T) {
 	got, _ := store.Load("pling.example", 10)
 	if len(got) != 1 || got[0].Text != "gem mig" || got[0].TS != 42 {
 		t.Errorf("history %#v", got)
+	}
+}
+
+func TestMentionsWholeWordsOnly(t *testing.T) {
+	cases := map[string]bool{
+		"hej nikolaj":         true,
+		"Nikolaj: se her":     true,
+		"@nikolaj?":           true,
+		"nikolajsen kommer":   false,
+		"minikolaj":           false,
+		"nikolaj_s er her":    false,
+		"":                    false,
+		"no mention at all":   false,
+		"(nikolaj) og anders": true,
+	}
+	for text, want := range cases {
+		if got := mentions(text, "nikolaj"); got != want {
+			t.Errorf("mentions(%q) = %v, want %v", text, got, want)
+		}
+	}
+	if mentions("hej", "") {
+		t.Error("empty name matched")
+	}
+}
+
+func TestWelcomeNamesAreSanitized(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.handleEvent(client.Connected{Welcome: protocol.Welcome{
+		Name:  "evil\x1b[2J",
+		Users: []string{"anders", "\x1b]0;pwn\x07", "Bad Name", "anders", "nikolaj"},
+	}})
+	if m.self != "nikolaj" {
+		t.Errorf("self = %q, want the config name kept", m.self)
+	}
+	if !slices.Equal(m.users, []string{"anders", "nikolaj"}) {
+		t.Errorf("users = %q", m.users)
 	}
 }

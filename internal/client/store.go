@@ -3,6 +3,8 @@ package client
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,24 +27,47 @@ type Entry struct {
 	Me     bool   `json:"me,omitempty"`
 }
 
+// maxLineBytes is the longest history line Load accepts; longer lines
+// (damage, or a file that is not ours) are skipped. A 4 KB message with
+// worst-case JSON escaping stays far below it.
+const maxLineBytes = 64 * 1024
+
 // Store is an append-only JSON Lines history file. Safe for concurrent use.
 type Store struct {
 	path string
 	mu   sync.Mutex
 	f    *os.File
+	// needNewline is set when the file does not end with a newline (say,
+	// after a crash mid-write), so the next entry starts on its own line.
+	needNewline bool
 }
 
-// OpenStore opens (or creates) the history file. The directory is created
-// with mode 0700 and the file with 0600.
+// OpenStore opens (or creates) the history file. The directory gets mode
+// 0700 and the file 0600, also when they already existed.
 func OpenStore(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{path: path, f: f}, nil
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, err
+	}
+	s := &Store{path: path, f: f}
+	if info, err := f.Stat(); err == nil && info.Size() > 0 {
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, info.Size()-1); err == nil && last[0] != '\n' {
+			s.needNewline = true
+		}
+	}
+	return s, nil
 }
 
 // Append writes one entry.
@@ -54,13 +79,19 @@ func (s *Store) Append(e Entry) error {
 	b = append(b, '\n')
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err = s.f.Write(b)
-	return err
+	if s.needNewline {
+		b = append([]byte{'\n'}, b...)
+	}
+	if _, err := s.f.Write(b); err != nil {
+		return err
+	}
+	s.needNewline = false
+	return nil
 }
 
 // Load returns the last n entries for server (all servers if empty), oldest
-// first. Lines that do not parse are skipped, so a damaged line never
-// blocks start-up.
+// first. Lines that do not parse or are too long are skipped, so a damaged
+// file never blocks start-up.
 func (s *Store) Load(server string, n int) ([]Entry, error) {
 	if n <= 0 {
 		return nil, nil
@@ -75,25 +106,47 @@ func (s *Store) Load(server string, n int) ([]Entry, error) {
 
 	ring := make([]Entry, 0, n)
 	next := 0
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	add := func(line []byte) {
 		var e Entry
-		if json.Unmarshal(sc.Bytes(), &e) != nil {
-			continue
+		if json.Unmarshal(line, &e) != nil {
+			return
 		}
 		if server != "" && e.Server != server {
-			continue
+			return
 		}
 		if len(ring) < n {
 			ring = append(ring, e)
-			continue
+			return
 		}
 		ring[next] = e
 		next = (next + 1) % n
 	}
-	if err := sc.Err(); err != nil {
-		return nil, err
+
+	r := bufio.NewReaderSize(f, maxLineBytes)
+	for {
+		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			// Too long: drop the rest of this line.
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = r.ReadSlice('\n')
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if len(line) > 0 {
+			add(line)
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	return append(ring[next:], ring[:next]...), nil
 }

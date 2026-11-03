@@ -55,6 +55,8 @@ type DialOptions struct {
 	UserAgent string
 	// Header holds extra HTTP headers for the WebSocket handshake.
 	Header http.Header
+	// Insecure allows ws:// to hosts other than localhost.
+	Insecure bool
 }
 
 // Dial connects and logs in. The signed host is the host[:port] part of
@@ -62,6 +64,9 @@ type DialOptions struct {
 func Dial(ctx context.Context, o DialOptions) (*Session, error) {
 	u, err := ParseServerURL(o.Server)
 	if err != nil {
+		return nil, err
+	}
+	if err := CheckTransport(u, o.Insecure); err != nil {
 		return nil, err
 	}
 	hdr := o.Header.Clone()

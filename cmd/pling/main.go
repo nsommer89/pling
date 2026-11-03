@@ -49,9 +49,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	serverFlag := fs.String("server", "", "server URL, e.g. wss://pling.example.com/ws (overrides the config file)")
 	showVersion := fs.Bool("version", false, "print the version and exit")
+	insecure := fs.Bool("insecure", false, "allow unencrypted ws:// to hosts other than localhost (testing only)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, "usage:\n"+
-			"  pling [--server URL]   connect to the chat\n"+
+			"  pling [--server URL] [--insecure]   connect to the chat\n"+
 			"  pling init             choose a name and server, create your key pair\n"+
 			"  pling pubkey           print the line to send to the server admin\n\n"+
 			"flags:\n")
@@ -75,7 +76,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	switch fs.Arg(0) {
 	case "init":
-		return runInit(cfgPath, *serverFlag, in, stdout)
+		return runInit(cfgPath, *serverFlag, *insecure, in, stdout)
 	case "pubkey":
 		return runPubkey(cfgPath, stdout)
 	case "":
@@ -88,7 +89,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if errors.Is(err, client.ErrNoConfig) {
 		fmt.Fprintln(stdout, "No config yet, let's set you up first.")
 		fmt.Fprintln(stdout)
-		if err := runInit(cfgPath, *serverFlag, in, stdout); err != nil {
+		if err := runInit(cfgPath, *serverFlag, *insecure, in, stdout); err != nil {
 			return err
 		}
 		fmt.Fprint(stdout, "\nPress Enter to connect (you will be let in once the admin has added your key)… ")
@@ -101,10 +102,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if *serverFlag != "" {
 		cfg.Server = *serverFlag
 	}
-	return chat(cfg)
+	return chat(cfg, *insecure)
 }
 
-func chat(cfg client.Config) error {
+func chat(cfg client.Config, insecure bool) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -113,6 +114,9 @@ func chat(cfg client.Config) error {
 	}
 	u, err := client.ParseServerURL(cfg.Server)
 	if err != nil {
+		return err
+	}
+	if err := client.CheckTransport(u, insecure); err != nil {
 		return err
 	}
 	dir, err := client.ConfigDir()
@@ -145,6 +149,7 @@ func chat(cfg client.Config) error {
 		Name:      cfg.Name,
 		Key:       key,
 		UserAgent: "pling/" + getVersion(),
+		Insecure:  insecure,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -191,7 +196,7 @@ func prompt(in *bufio.Reader, out io.Writer, label, def string) (string, error) 
 	return line, nil
 }
 
-func runInit(cfgPath, serverFlag string, in *bufio.Reader, out io.Writer) error {
+func runInit(cfgPath, serverFlag string, insecure bool, in *bufio.Reader, out io.Writer) error {
 	cfg, err := client.LoadConfig(cfgPath)
 	if err != nil && !errors.Is(err, client.ErrNoConfig) {
 		fmt.Fprintf(out, "Ignoring the old config (%v).\n", err)
@@ -220,7 +225,12 @@ func runInit(cfgPath, serverFlag string, in *bufio.Reader, out io.Writer) error 
 		if err != nil {
 			return err
 		}
-		if _, err := client.ParseServerURL(server); err == nil {
+		u, err := client.ParseServerURL(server)
+		if err == nil {
+			if err := client.CheckTransport(u, insecure); err != nil {
+				fmt.Fprintln(out, "  Unencrypted ws:// only works for localhost. Use wss://, or run init with --insecure for testing.")
+				continue
+			}
 			cfg.Server = server
 			break
 		}
